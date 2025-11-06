@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Photobooth</title>
+<style>
+  body, html { margin:0; padding:0; font-family:sans-serif; display:flex; flex-direction:column; align-items:center; background:#111; color:#fff; }
+  video, canvas, img { max-width:100%; border-radius:10px; margin:10px 0; }
+  button { margin:5px; padding:10px 20px; font-size:16px; border:none; border-radius:5px; cursor:pointer; }
+  #controls { display:flex; flex-wrap:wrap; justify-content:center; margin-bottom:10px; }
+  input[type=file] { display:none; }
+  #qrCanvas { margin:10px 0; }
+</style>
+</head>
+<body>
+
+<h2>Photobooth</h2>
+
+<!-- Mode Toggle -->
+<div id="controls">
+  <button id="photoboothBtn">Photobooth Mode</button>
+  <button id="scannerBtn">Scanner Mode</button>
+</div>
+
+<!-- Photobooth Mode -->
+<div id="photoboothMode">
+  <video id="video" autoplay playsinline></video>
+  <canvas id="canvas" style="display:none;"></canvas>
+  <img id="preview" alt="Preview" />
+  <input type="file" id="uploadImage" accept="image/*"/>
+  <button id="takePhotoBtn">Take Photo</button>
+  <button id="insertBtn">Upload/Insert Image</button>
+  <canvas id="qrCanvas"></canvas>
+</div>
+
+<!-- Scanner Mode -->
+<div id="scannerMode" style="display:none;">
+  <video id="scannerVideo" autoplay playsinline></video>
+  <canvas id="scannerCanvas" style="display:none;"></canvas>
+  <img id="scannedImg" alt="Scanned" />
+  <input type="file" id="scannerUpload" accept="image/*"/>
+  <button id="scannerInsertBtn">Insert Image</button>
+  <a id="downloadBtn" download="photobooth.png">Download</a>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html5-qrcode"></script>
+
+<script>
+// Mode toggle
+const photoboothBtn = document.getElementById('photoboothBtn');
+const scannerBtn = document.getElementById('scannerBtn');
+const photoboothMode = document.getElementById('photoboothMode');
+const scannerMode = document.getElementById('scannerMode');
+photoboothBtn.onclick = ()=>{ photoboothMode.style.display='block'; scannerMode.style.display='none'; }
+scannerBtn.onclick = ()=>{ photoboothMode.style.display='none'; scannerMode.style.display='block'; }
+
+// -------- Photobooth Mode --------
+const video = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const preview = document.getElementById('preview');
+const uploadImage = document.getElementById('uploadImage');
+const qrCanvas = document.getElementById('qrCanvas');
+
+// Camera access
+navigator.mediaDevices.getUserMedia({video:true}).then(stream=>{ video.srcObject=stream; });
+
+// Take photo
+document.getElementById('takePhotoBtn').onclick = async ()=>{
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(video, 0, 0);
+  preview.src = canvas.toDataURL('image/png');
+
+  // Automatically upload and generate QR
+  await uploadAndGenerateQR();
+};
+
+// Insert/upload image
+document.getElementById('insertBtn').onclick = async ()=>{
+  const file = uploadImage.files[0];
+  if(!file) return alert('Select an image first');
+  const img = new Image();
+  img.onload = ()=>{
+    canvas.width = img.width;
+    canvas.height = img.height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+    preview.src = canvas.toDataURL('image/png');
+    uploadAndGenerateQR();
+  };
+  img.src = URL.createObjectURL(file);
+};
+
+// Upload to Cloudinary & generate QR
+async function uploadAndGenerateQR(){
+  const blob = await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));
+  try {
+    // Get signature from backend
+    const sigRes = await fetch('http://localhost:3000/get-signature'); // replace with your backend
+    const { signature, timestamp } = await sigRes.json();
+
+    const formData = new FormData();
+    formData.append('file', blob);
+    formData.append('upload_preset', 'signed_photobooth');
+    formData.append('timestamp', timestamp);
+    formData.append('signature', signature);
+
+    const res = await fetch('https://api.cloudinary.com/v1_1/djgaxcy0r/image/upload',{method:'POST',body:formData});
+    const data = await res.json();
+
+    console.log('Uploaded:', data);
+
+    // QR pointing to website with photo_id
+    // For local testing, replace window.location.origin with local IP if scanning another device
+    const url = `${window.location.origin}/?photo_id=${data.public_id}`;
+    QRCode.toCanvas(qrCanvas, url, { width:200 }, function(error){
+      if(error) console.error(error);
+      else console.log('QR generated!');
+    });
+
+  } catch(e){ console.error(e); }
+}
+
+// -------- Scanner Mode --------
+const scannedImg = document.getElementById('scannedImg');
+const scannerUpload = document.getElementById('scannerUpload');
+const scannerCanvas = document.getElementById('scannerCanvas');
+const downloadBtn = document.getElementById('downloadBtn');
+
+const html5QrCode = new Html5Qrcode("scannerVideo");
+html5QrCode.start(
+  { facingMode: "environment" },
+  { fps: 10, qrbox: 250 },
+  async (decodedText)=>{
+    html5QrCode.stop();
+    try{
+      const res = await fetch(`http://localhost:3000/get-signed-url?public_id=${decodedText}`);
+      const { url } = await res.json();
+      scannedImg.src = url;
+    } catch(e){ console.error(e); }
+  }
+);
+
+// Insert/upload image in scanner mode
+document.getElementById('scannerInsertBtn').onclick = ()=>{
+  const file = scannerUpload.files[0];
+  if(!file) return alert('Select an image first');
+  const img = new Image();
+  img.onload = ()=>{
+    scannerCanvas.width = scannedImg.naturalWidth;
+    scannerCanvas.height = scannedImg.naturalHeight;
+    const ctx = scannerCanvas.getContext('2d');
+    ctx.drawImage(scannedImg,0,0);
+    ctx.drawImage(img,0,0,scannerCanvas.width,scannerCanvas.height);
+    scannedImg.src = scannerCanvas.toDataURL('image/png');
+    downloadBtn.href = scannedImg.src;
+  };
+  img.src = URL.createObjectURL(file);
+};
+</script>
+</body>
+</html>
