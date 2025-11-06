@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Offline Photobooth</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      background: #f5f5f5;
+      margin: 0;
+      padding: 20px;
+    }
+    h1 { margin-bottom: 10px; }
+    video, img {
+      border-radius: 10px;
+      width: 320px;
+      margin-top: 10px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.2);
+    }
+    button, input[type=file] {
+      margin: 10px;
+      padding: 10px 20px;
+      border: none;
+      border-radius: 8px;
+      background: #007bff;
+      color: white;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #0056b3;
+    }
+    #qrcode {
+      margin-top: 20px;
+    }
+    #menu {
+      margin-bottom: 15px;
+    }
+    #scanner, #camera-section {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <h1>📸 Offline Photobooth</h1>
+
+  <!-- Menu -->
+  <div id="menu">
+    <button id="take-photo-btn">📷 Take Photo</button>
+    <button id="scan-btn">🔍 Scan QR</button>
+  </div>
+
+  <!-- Camera Section -->
+  <div id="camera-section">
+    <video id="camera" autoplay playsinline></video><br>
+    <button id="capture">Capture</button>
+    <canvas id="canvas" style="display:none;"></canvas>
+    <div id="qrcode"></div>
+  </div>
+
+  <!-- QR Scanner Section -->
+  <div id="scanner">
+    <div id="qr-reader" style="width:320px; margin:auto;"></div>
+    <p>or upload a QR image:</p>
+    <input type="file" id="qr-upload" accept="image/*">
+    <div id="photo"></div>
+  </div>
+
+  <!-- Libraries -->
+  <script src="qrcode.min.js"></script>
+  <script src="https://unpkg.com/html5-qrcode"></script>
+
+<script>
+  // DOM elements
+  const takePhotoBtn = document.getElementById("take-photo-btn");
+  const scanBtn = document.getElementById("scan-btn");
+  const cameraSection = document.getElementById("camera-section");
+  const scannerSection = document.getElementById("scanner");
+  const video = document.getElementById("camera");
+  const canvas = document.getElementById("canvas");
+  const captureBtn = document.getElementById("capture");
+  const uploadInput = document.createElement("input");
+  const qrDiv = document.getElementById("qrcode");
+  const photoDiv = document.getElementById("photo");
+  const qrUpload = document.getElementById("qr-upload");
+
+  uploadInput.type = "file";
+  uploadInput.accept = "image/*";
+
+  // Add upload button dynamically beside Capture
+  const uploadBtn = document.createElement("button");
+  uploadBtn.textContent = "📁 Upload Photo";
+  uploadBtn.style.marginLeft = "10px";
+  captureBtn.insertAdjacentElement("afterend", uploadBtn);
+
+  let db;
+  let html5QrCode;
+  let cameraStream = null;
+
+  // IndexedDB setup
+  const request = indexedDB.open("PhotoBoothDB", 1);
+  request.onupgradeneeded = e => {
+    db = e.target.result;
+    db.createObjectStore("photos", { keyPath: "id" });
+  };
+  request.onsuccess = e => db = e.target.result;
+
+  // Menu actions
+  takePhotoBtn.onclick = async () => {
+    await stopScanner();
+    scannerSection.style.display = "none";
+    cameraSection.style.display = "block";
+    startCamera();
+  };
+
+  scanBtn.onclick = async () => {
+    await stopCamera();
+    cameraSection.style.display = "none";
+    scannerSection.style.display = "block";
+    startScanner();
+  };
+
+  // CAMERA FUNCTIONS
+  async function startCamera() {
+    try {
+      cameraStream = await navigator.mediaDevices.getUserMedia({ video: true });
+      video.srcObject = cameraStream;
+    } catch (err) {
+      alert("Camera access denied: " + err);
+    }
+  }
+
+  async function stopCamera() {
+    if (cameraStream) {
+      cameraStream.getTracks().forEach(track => track.stop());
+      cameraStream = null;
+    }
+  }
+
+  // CAPTURE BUTTON
+  captureBtn.onclick = () => {
+    const ctx = canvas.getContext("2d");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0);
+    const dataUrl = canvas.toDataURL("image/jpeg");
+    savePhotoAndGenerateQR(dataUrl);
+  };
+
+  // UPLOAD BUTTON
+  uploadBtn.onclick = () => {
+    uploadInput.click();
+  };
+
+  uploadInput.addEventListener("change", () => {
+    const file = uploadInput.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      const dataUrl = e.target.result;
+      savePhotoAndGenerateQR(dataUrl);
+    };
+    reader.readAsDataURL(file);
+  });
+
+  // SAVE + GENERATE QR
+  function savePhotoAndGenerateQR(dataUrl) {
+    const id = Math.random().toString(36).substring(2, 10);
+    const tx = db.transaction("photos", "readwrite");
+    tx.objectStore("photos").add({ id, image: dataUrl, date: new Date() });
+
+    tx.oncomplete = () => {
+      qrDiv.innerHTML = "";
+      new QRCode(qrDiv, { text: id, width: 200, height: 200 });
+      alert("✅ Photo saved and QR generated!");
+    };
+  }
+
+  // SCANNER FUNCTIONS
+  async function startScanner() {
+    photoDiv.innerHTML = "";
+    const qrReaderDiv = document.getElementById("qr-reader");
+    qrReaderDiv.innerHTML = "";
+
+    html5QrCode = new Html5Qrcode("qr-reader");
+
+    try {
+      const devices = await Html5Qrcode.getCameras();
+      if (devices && devices.length) {
+        await html5QrCode.start(
+          { facingMode: "environment" },
+          { fps: 10, qrbox: { width: 250, height: 250 } },
+          (decodedText) => {
+            loadPhoto(decodedText);
+            stopScanner();
+          }
+        );
+      } else {
+        alert("No camera found.");
+      }
+    } catch (err) {
+      alert("QR scanner error: " + err);
+    }
+  }
+
+  async function stopScanner() {
+    if (html5QrCode) {
+      try {
+        await html5QrCode.stop();
+        await html5QrCode.clear();
+      } catch (err) {
+        console.warn("Scanner already stopped.");
+      }
+      html5QrCode = null;
+    }
+  }
+
+  // LOAD PHOTO
+  function loadPhoto(id) {
+    const tx = db.transaction("photos", "readonly");
+    const store = tx.objectStore("photos");
+    const getReq = store.get(id);
+    getReq.onsuccess = e => {
+      const data = e.target.result;
+      if (data) {
+        photoDiv.innerHTML = `
+          <h2>Your Photo</h2>
+          <img src="${data.image}" width="300"/><br>
+          <a href="${data.image}" download="photo_${id}.jpg">⬇️ Download</a>
+        `;
+      } else {
+        photoDiv.innerHTML = "<p>❌ Photo not found in this browser.</p>";
+      }
+    };
+  }
+
+  // QR UPLOAD
+  qrUpload.addEventListener("change", async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const qrReader = new Html5Qrcode("qr-reader");
+    qrReader.scanFile(file, true)
+      .then(decodedText => {
+        loadPhoto(decodedText);
+      })
+      .catch(() => alert("Failed to read QR code from image."));
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,32 @@
+body {
+  font-family: Arial, sans-serif;
+  text-align: center;
+  background: #f9f9f9;
+  margin: 0;
+  padding: 20px;
+}
+
+video, img {
+  border-radius: 10px;
+  width: 320px;
+  margin-top: 10px;
+  box-shadow: 0 0 10px rgba(0,0,0,0.2);
+}
+
+button {
+  margin-top: 10px;
+  padding: 10px 20px;
+  border: none;
+  border-radius: 8px;
+  background: #007bff;
+  color: white;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #0056b3;
+}
+
+#qrcode {
+  margin-top: 20px;
+}
